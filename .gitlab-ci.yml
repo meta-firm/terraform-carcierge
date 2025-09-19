@@ -1,0 +1,87 @@
+variables:
+  ENVIRONMENTS: "staging" # "staging qa uat prod" 
+  MODULES: "app"  #"shared data app"  
+  APP_NAME: "carcierge"
+  TYPE: "app"
+  BACKEND_REGION: "us-west-1"
+  RUN_SECURITY_SCAN: "FALSE" #Only run if TRUE
+  RUN_COST_SCAN: "FALSE" #Only run if TRUE
+  TF_LOG: "" # Leave blank if not needed https://www.terraform.io/docs/internals/debugging.html
+ 
+image:
+  name: hashicorp/terraform:1.2.9 #Never downgrade TF version!
+  entrypoint:
+    - '/usr/bin/env'
+    - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+ 
+stages:
+  - validate 
+  - plan
+  - analyse
+  - apply
+ 
+validate:
+  stage: validate
+  script:
+    - /bin/sh ./pipeline-scripts/tf-validate.sh "${ENVIRONMENTS}" "${MODULES}" "${APP_NAME}" "${TYPE}" "${BACKEND_REGION}" "${TF_LOG}"
+  only:
+    - main
+    - qa
+    - uat
+    - prod
+    - /feature/.*/i
+ 
+plan:
+  stage: plan
+  dependencies:
+    - validate
+  script:
+    - /bin/sh ./pipeline-scripts/tf-plan.sh "${ENVIRONMENTS}" "${MODULES}" "${APP_NAME}" "${TYPE}" "${BACKEND_REGION}" "${TF_LOG}"
+  artifacts:
+    expire_in: 2 hours
+    paths:
+      - ${CI_PROJECT_DIR}/*.tfplan
+      - ${CI_PROJECT_DIR}/*.tfplan.json
+  only:
+    - main
+    - qa
+    - uat
+    - prod
+    - /feature/.*/i
+ 
+security:
+  stage: analyse
+  image: ubuntu:focal
+  timeout: 90m
+  dependencies:
+    - plan
+  script: 
+    - /bin/sh ./pipeline-scripts/tf-scan.sh "${TYPE}" "${APP_NAME}" "${ENVIRONMENTS}" "${MODULES}"
+  rules:
+    - if: '$RUN_SECURITY_SCAN == "TRUE"'
+      allow_failure: true # Note Gitlab thinks a rule failing means the pipeline should fail, but this is incorrect for this jobs requirements.
+ 
+cost:
+  stage: analyse
+  image: ubuntu:focal
+  timeout: 90m
+  dependencies:
+    - plan
+  script: 
+    - /bin/bash ./pipeline-scripts/tf-cost.sh "${TYPE}" "${APP_NAME}" "${ENVIRONMENTS}" "${MODULES}"
+  rules:
+    - if: '$RUN_COST_SCAN == "TRUE"'
+      allow_failure: true
+
+apply:
+  stage: apply  
+  dependencies:
+    - plan
+  script:
+    - /bin/sh ./pipeline-scripts/tf-apply.sh "${ENVIRONMENTS}" "${MODULES}" "${APP_NAME}" "${TYPE}" "${BACKEND_REGION}" "${TF_LOG}"
+  when: manual
+  only:
+    - main
+    - qa
+    - uat
+    - prod

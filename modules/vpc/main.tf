@@ -7,10 +7,9 @@ resource "aws_vpc" "main" {
   enable_dns_hostnames = true
   enable_dns_support   = true
 
-  tags = {
-    Name        = "${var.environment}-vpc"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-vpc"
+  })
 }
 
 # Public Subnets
@@ -21,27 +20,27 @@ resource "aws_subnet" "public" {
   cidr_block        = var.public_cidrs[count.index]
   availability_zone = data.aws_availability_zones.available.names[count.index]
 
-  # Required for EKS. Enable auto-assign public IP
+  # Enable auto-assign public IP
   map_public_ip_on_launch = true
 
-  tags = {
-    Name        = "${var.environment}-public-subnet-${count.index + 1}"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-vpc-public-subnet-${count.index + 1}"
+    Type = "public"
+  })
 }
 
 # Private Subnets
-# Used for internal resources like ECS tasks and Redis
+# Used for internal resources like ECS tasks, RDS, and Redis
 resource "aws_subnet" "private" {
   count             = length(var.private_cidrs)
   vpc_id            = aws_vpc.main.id
   cidr_block        = var.private_cidrs[count.index]
   availability_zone = data.aws_availability_zones.available.names[count.index]
 
-  tags = {
-    Name        = "${var.environment}-private-subnet-${count.index + 1}"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-vpc-private-subnet-${count.index + 1}"
+    Type = "private"
+  })
 }
 
 # Internet Gateway
@@ -49,21 +48,19 @@ resource "aws_subnet" "private" {
 resource "aws_internet_gateway" "main" {
   vpc_id = aws_vpc.main.id
 
-  tags = {
-    Name        = "${var.environment}-igw"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-vpc-igw"
+  })
 }
 
 # Elastic IP for NAT Gateway
 resource "aws_eip" "nat" {
-  count = length(var.public_cidrs)
+  count  = length(var.public_cidrs)
   domain = "vpc"
 
-  tags = {
-    Name        = "${var.environment}-nat-eip-${count.index + 1}"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-vpc-nat-eip-${count.index + 1}"
+  })
 }
 
 # NAT Gateway
@@ -73,10 +70,9 @@ resource "aws_nat_gateway" "main" {
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.public[count.index].id
 
-  tags = {
-    Name        = "${var.environment}-nat-${count.index + 1}"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-vpc-nat-${count.index + 1}"
+  })
 
   depends_on = [aws_internet_gateway.main]
 }
@@ -90,10 +86,9 @@ resource "aws_route_table" "public" {
     gateway_id = aws_internet_gateway.main.id
   }
 
-  tags = {
-    Name        = "${var.environment}-public-rt"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-vpc-public-rt"
+  })
 }
 
 # Route Tables for Private Subnets
@@ -106,10 +101,9 @@ resource "aws_route_table" "private" {
     nat_gateway_id = aws_nat_gateway.main[count.index].id
   }
 
-  tags = {
-    Name        = "${var.environment}-private-rt-${count.index + 1}"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-vpc-private-rt-${count.index + 1}"
+  })
 }
 
 # Route Table Associations for Public Subnets

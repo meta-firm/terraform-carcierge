@@ -1,137 +1,16 @@
-# ECS Cluster Configuration
-
-# Data source for ECS-optimized AMI
-data "aws_ami" "ecs" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-ecs-hvm-*-x86_64-ebs"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
+# ECS Cluster and Services Configuration
 
 # ECS Cluster with container insights enabled
 resource "aws_ecs_cluster" "main" {
-  name = "${var.environment}-${var.project_name}-cluster"
+  name = "${var.environment}-${var.project_name}-ecs-cluster"
 
   setting {
     name  = "containerInsights"
     value = "enabled"
   }
 
-  tags = {
-    Name        = "${var.environment}-${var.project_name}-cluster"
-    Environment = var.environment
-  }
-}
-
-# Launch Template for ECS Tasks
-resource "aws_launch_template" "ecs" {
-  name_prefix   = "${var.environment}-${var.project_name}-template"
-  image_id      = data.aws_ami.ecs.id
-  instance_type = var.instance_type
-  description   = "updated ami"
-
-  network_interfaces {
-    associate_public_ip_address = false
-    security_groups            = [var.ecs_sg_id]
-  }
-
-  iam_instance_profile {
-    name = aws_iam_instance_profile.ecs_instance_profile.name
-  }
-
-  user_data = base64encode(<<-EOF
-              #!/bin/bash
-              echo "ECS_CLUSTER=${aws_ecs_cluster.main.name}" >> /etc/ecs/ecs.config
-              echo "ECS_ENABLE_CONTAINER_METADATA=true" >> /etc/ecs/ecs.config
-              echo "ECS_CONTAINER_STOP_TIMEOUT=120s" >> /etc/ecs/ecs.config
-              echo "ECS_ENABLE_TASK_IAM_ROLE=true" >> /etc/ecs/ecs.config
-              
-              # Install SSM agent
-              yum install -y amazon-ssm-agent
-              systemctl enable amazon-ssm-agent
-              systemctl start amazon-ssm-agent
-              timedatectl set-timezone America/Phoenix
-              EOF
-  )
-
-  monitoring {
-    enabled = true
-  }
-
-  tag_specifications {
-    resource_type = "instance"
-    tags = {
-      Name        = "${var.environment}-${var.project_name}-ecs"
-      Environment = var.environment
-    }
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-# Auto Scaling Group for ECS Instances
-resource "aws_autoscaling_group" "ecs" {
-  name                = "${var.environment}-${var.project_name}-asg"
-  vpc_zone_identifier = var.private_subnets
-  target_group_arns   = [aws_lb_target_group.main.arn]
-  health_check_type   = "EC2"
-  min_size           = var.min_capacity
-  max_size           = var.max_capacity
-  desired_capacity   = var.desired_count
-
-  launch_template {
-    id      = aws_launch_template.ecs.id
-    version = "$Latest"
-  }
-
-  tag {
-    key                 = "Name"
-    value              = "${var.environment}-${var.project_name}-instance"
-    propagate_at_launch = true
-  }
-
-  tag {
-    key                 = "Environment"
-    value              = var.environment
-    propagate_at_launch = true
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-# IAM Instance Profile for ECS instances
-resource "aws_iam_instance_profile" "ecs_instance_profile" {
-  name = "${var.environment}-${var.project_name}-ecs-instance-profile"
-  role = aws_iam_role.ecs_instance_role.name
-}
-
-# IAM Role for ECS instances
-resource "aws_iam_role" "ecs_instance_role" {
-  name = "${var.environment}-${var.project_name}-ecs-instance-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-ecs-cluster"
   })
 }
 
@@ -151,12 +30,10 @@ resource "aws_iam_role" "ecs_execution_role" {
       }
     ]
   })
-}
 
-# Attach ECS Task Execution Policy
-resource "aws_iam_role_policy_attachment" "ecs_execution_role_policy" {
-  role       = aws_iam_role.ecs_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-ecs-execution-role"
+  })
 }
 
 # ECS Task Role
@@ -175,41 +52,82 @@ resource "aws_iam_role" "ecs_task_role" {
       }
     ]
   })
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-ecs-task-role"
+  })
 }
 
-# Attach required IAM policies
-resource "aws_iam_role_policy_attachment" "ecs_instance_role_policy" {
-  role       = aws_iam_role.ecs_instance_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
+# Attach ECS Task Execution Policy
+resource "aws_iam_role_policy_attachment" "ecs_execution_role_policy" {
+  role       = aws_iam_role.ecs_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Attach SSM policy
-resource "aws_iam_role_policy_attachment" "ecs_instance_ssm_policy" {
-  role       = aws_iam_role.ecs_instance_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+# Custom policy for accessing Secrets Manager
+resource "aws_iam_policy" "ecs_secrets_policy" {
+  name        = "${var.environment}-${var.project_name}-ecs-secrets-policy"
+  description = "Policy for ECS tasks to access Secrets Manager"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [
+          "arn:aws:secretsmanager:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:secret:${var.environment}-${var.project_name}-*"
+        ]
+      }
+    ]
+  })
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-ecs-secrets-policy"
+  })
 }
 
-# Task Definition
-resource "aws_ecs_task_definition" "main" {
-  family                   = "${var.environment}-${var.project_name}"
-  network_mode             = "bridge"
-  requires_compatibilities = ["EC2"]
+resource "aws_iam_role_policy_attachment" "ecs_secrets_policy" {
+  role       = aws_iam_role.ecs_task_role.name
+  policy_arn = aws_iam_policy.ecs_secrets_policy.arn
+}
+
+# CloudWatch Log Groups for each service
+resource "aws_cloudwatch_log_group" "services" {
+  for_each = var.services
+
+  name              = "/ecs/${var.environment}-${var.project_name}-${each.key}"
+  retention_in_days = 7
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-${each.key}-logs"
+    Service = each.key
+  })
+}
+
+# Task Definitions for each service
+resource "aws_ecs_task_definition" "services" {
+  for_each = var.services
+
+  family                   = "${var.environment}-${var.project_name}-${each.key}"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
   execution_role_arn       = aws_iam_role.ecs_execution_role.arn
   task_role_arn           = aws_iam_role.ecs_task_role.arn
-  cpu                     = var.task_cpu
-  memory                  = var.task_memory
+  cpu                     = each.value.cpu
+  memory                  = each.value.memory
 
   container_definitions = jsonencode([
     {
-      name      = "${var.environment}-${var.project_name}"
-      image     = var.container_image
+      name      = "${var.environment}-${var.project_name}-${each.key}"
+      image     = each.value.container_image
       essential = true
-      cpu       = var.container_cpu
 
       portMappings = [
         {
-          containerPort = var.container_port
-          hostPort      = 0
+          containerPort = each.value.container_port
           protocol      = "tcp"
         }
       ]
@@ -217,161 +135,58 @@ resource "aws_ecs_task_definition" "main" {
       environment = concat(
         [
           {
-            name  = "ZOHO_CLIENT_ID"
-            value = "1000.HXWZ1C5GBNUCLHNEMK832VXIY1TRBH"
-          },
-          {
-            name  = "REDIS_HOST"
-            value = "master.prod-website-redis.sdn2qe.usw1.cache.amazonaws.com"
-          },
-          {
-            name  = "ZOHO_CLIENT_SECRET"
-            value = "5be48f15c39e3f501777a91fd7afc67a9035e56d21"
-          },
-          {
-            name  = "GOOGLEREV_API_KEY"
-            value = "AIzaSyAjCB7SBaVPQdap5_Kf1RcXfZLZlhLC5Wg"
-          },
-          {
             name  = "ENVIRONMENT"
-            value = "PRODUCTION"
+            value = var.environment
           },
           {
-            name  = "MAILGUN_API_KEY"
-            value = "5ece34ea6302105998ee2a99cfc95673-2d27312c-fffeca4f"
+            name  = "SERVICE_NAME"
+            value = each.key
           },
           {
-            name  = "PROTOCOL"
-            value = "https://"
+            name  = "RDS_ENDPOINT"
+            value = var.rds_endpoint
           },
           {
-            name  = "GQL_TOKEN"
-            value = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ..."
+            name  = "REDIS_ENDPOINT"
+            value = var.redis_endpoint
           },
           {
-            name  = "NEXT_PUBLIC_ENABLE_PRIVATE_CLIENT_MAP"
-            value = "true"
-          },
-          {
-            name  = "SMTP2GO_API_KEY"
-            value = "api-CB70382F49C343B5A63CCF6490820157"
-          },
-          {
-            name  = "ZOHO_AUTHORIZED_REDIRECT_URI"
-            value = "https://gorentals.com/zoho"
-          },
-          {
-            name  = "MAILGUN_MAILER_DOMAIN"
-            value = "mailer.gorentals.com"
-          },
-          {
-            name  = "NEXT_PUBLIC_CARCIERGE_API_KEY",
-            value = "6768a7fe-0fd7-47bd-9d0b-599dc013ae41"
-          },
-          {
-            name  = "MAILGUN_PRIVATE_CLIENT_DOMAIN"
-            value = "privateclient.gorentals.com"
-          },
-          {
-            name  = "NEXT_PUBLIC_MAPBOX_API_KEY"
-            value = "pk.eyJ1IjoiZ29yZW50YWxzYXBwcyIsImEiOiJjbWZiNDZ4M2IwNTFmMmtxMzBjc3hyNHViIn0.cPilANxIa-yNUyxCuLpi8g"
-          },
-          {
-            name  = "MAILGUN_DOMAIN"
-            value = "reservations.gorentals.com"
-          },
-          {
-            name  = "MAILGUN_GO_RENTALS_DOMAIN"
-            value = "gorentals.com"
-          },
-          {
-            name  = "NEXT_PUBLIC_GOOGLE_MAP_API_KEY"
-            value = "AIzaSyB49Sh7frZH0oBFq_ISjWi1BtRAwscUfQg"
-          },
-          {
-            name  = "RECAPTCHA_PRIVATE_KEY"
-            value = "6LcMoOonAAAAAKeJxy6Y95zdWmxkl0UzJVlARc97"
-          },
-          {
-            name  = "NEXT_PUBLIC_S3_IMG_DOMAIN"
-            value = "https://d31ppftgl7y43j.cloudfront.net"
-          },
-          {
-            name  = "REDIS_NOTIFICATION_RECEIVER"
-            value = "mygosupport@gorentals.com, harshalp@gorentals.com, shreyanshh@gorentals.com, jayamurugans@gorentals.com"
-          },
-          {
-            name  = "REDIS_PORT"
-            value = "6379"
-          },
-          {
-            name  = "NODE_ENV"
-            value = "Production"
-          },
-          {
-            name  = "GO_SITE_CMS_API"
-            value = "https://api.v2.gosite.gorentals.dnadev.net"
-          },
-          {
-            name  = "NEXT_PUBLIC_RECAPTCHA_SITE_KEY"
-            value = "6LcMoOonAAAAAJb1klZbtIP6HuwoSdEhpLeFcbP8"
-          },
-          {
-            name  = "NEXT_PUBLIC_ENVIRONMENT"
-            value = "PRODUCTION"
+            name  = "OPENSEARCH_ENDPOINT"
+            value = var.opensearch_endpoint
           }
         ],
-        var.container_environment
+        [for k, v in each.value.environment_variables : {
+          name  = k
+          value = v
+        }]
       )
 
       logConfiguration = {
         logDriver = "awslogs"
         options = {
-          awslogs-group         = aws_cloudwatch_log_group.main.name
+          awslogs-group         = aws_cloudwatch_log_group.services[each.key].name
           awslogs-region        = data.aws_region.current.name
           awslogs-stream-prefix = "ecs"
         }
       }
 
-      linuxParameters = {
-        initProcessEnabled = true
+      healthCheck = {
+        command = [
+          "CMD-SHELL",
+          "curl -f http://localhost:${each.value.container_port}${each.value.health_check_path} || exit 1"
+        ]
+        interval    = 30
+        timeout     = 5
+        retries     = 3
+        startPeriod = 60
       }
     }
   ])
 
-  tags = {
-    Name        = "${var.environment}-${var.project_name}-task"
-    Environment = var.environment
-  }
-}
-
-# ECS Service
-resource "aws_ecs_service" "main" {
-  name                               = "${var.environment}-${var.project_name}"
-  cluster                           = aws_ecs_cluster.main.id
-  task_definition                   = aws_ecs_task_definition.main.arn
-  desired_count                     = var.desired_count
-  launch_type                       = "EC2"
-  health_check_grace_period_seconds = 60
-
-  deployment_maximum_percent         = 100
-  deployment_minimum_healthy_percent = 50
-  enable_execute_command            = true
-
-  load_balancer {
-    target_group_arn = aws_lb_target_group.main.arn
-    container_name   = "${var.environment}-${var.project_name}"
-    container_port   = var.container_port
-  }
-
-  deployment_controller {
-    type = "ECS"
-  }
-
-  tags = {
-    Name        = "${var.environment}-${var.project_name}-service"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-${each.key}-task"
+    Service = each.key
+  })
 }
 
 # Application Load Balancer
@@ -382,41 +197,44 @@ resource "aws_lb" "main" {
   security_groups    = [var.alb_sg_id]
   subnets           = var.public_subnets
 
-  tags = {
-    Name        = "${var.environment}-${var.project_name}-alb"
-    Environment = var.environment
-  }
+  enable_deletion_protection = false
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-alb"
+  })
 }
 
-# Target Group
-resource "aws_lb_target_group" "main" {
-  name        = "${var.environment}-${var.project_name}-tg"
-  port        = var.container_port
+# Target Groups for each service
+resource "aws_lb_target_group" "services" {
+  for_each = var.services
+
+  name        = "${var.environment}-${var.project_name}-${each.key}-tg"
+  port        = each.value.container_port
   protocol    = "HTTP"
   vpc_id      = var.vpc_id
-  target_type = "instance"
+  target_type = "ip"
 
   health_check {
-    path                = var.health_check_path
-    healthy_threshold   = 3
-    unhealthy_threshold = 3
+    enabled             = true
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
     timeout             = 5
     interval            = 30
-    matcher            = "200-299"
+    path                = each.value.health_check_path
+    matcher            = "200"
     port               = "traffic-port"
+    protocol           = "HTTP"
   }
 
-  # Deregistration delay
   deregistration_delay = 30
 
-  tags = {
-    Name        = "${var.environment}-${var.project_name}-tg"
-    Environment = var.environment
-  }
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-${each.key}-tg"
+    Service = each.key
+  })
 }
 
-# ALB Listener
-# HTTP Listener - Redirect to HTTPS
+# ALB Listeners
 resource "aws_lb_listener" "http" {
   load_balancer_arn = aws_lb.main.arn
   port              = "80"
@@ -431,153 +249,146 @@ resource "aws_lb_listener" "http" {
       status_code = "HTTP_301"
     }
   }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-alb-http-listener"
+  })
 }
 
-# HTTPS Listener
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.main.arn
   port              = "443"
   protocol          = "HTTPS"
-  ssl_policy        = "ELBSecurityPolicy-2016-08"
+  ssl_policy        = "ELBSecurityPolicy-TLS-1-2-2017-01"
   certificate_arn   = var.ssl_certificate_arn
 
+  # Default action - route to the first service (typically web/api)
   default_action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.main.arn
+    target_group_arn = aws_lb_target_group.services[keys(var.services)[0]].arn
   }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-alb-https-listener"
+  })
 }
 
-# Auto Scaling Configuration
-resource "aws_appautoscaling_target" "ecs_target" {
-  max_capacity       = var.max_capacity
-  min_capacity       = var.min_capacity
-  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.main.name}"
+# ALB Listener Rules for path-based routing
+resource "aws_lb_listener_rule" "services" {
+  for_each = { for k, v in var.services : k => v if k != keys(var.services)[0] }
+
+  listener_arn = aws_lb_listener.https.arn
+  priority     = 100 + index(keys(var.services), each.key)
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.services[each.key].arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["/${each.key}/*"]
+    }
+  }
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-${each.key}-rule"
+    Service = each.key
+  })
+}
+
+# ECS Services
+resource "aws_ecs_service" "services" {
+  for_each = var.services
+
+  name            = "${var.environment}-${var.project_name}-${each.key}"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.services[each.key].arn
+  desired_count   = each.value.desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = var.private_subnets
+    security_groups  = [var.ecs_sg_id]
+    assign_public_ip = false
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.services[each.key].arn
+    container_name   = "${var.environment}-${var.project_name}-${each.key}"
+    container_port   = each.value.container_port
+  }
+
+  deployment_configuration {
+    maximum_percent         = 200
+    minimum_healthy_percent = 100
+  }
+
+  enable_execute_command = true
+
+  depends_on = [aws_lb_listener.https]
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-${each.key}-service"
+    Service = each.key
+  })
+}
+
+# Auto Scaling Targets
+resource "aws_appautoscaling_target" "services" {
+  for_each = var.services
+
+  max_capacity       = each.value.desired_count * 3
+  min_capacity       = 1
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.services[each.key].name}"
   scalable_dimension = "ecs:service:DesiredCount"
   service_namespace  = "ecs"
+
+  tags = merge(var.common_tags, {
+    Name = "${var.environment}-${var.project_name}-${each.key}-scaling-target"
+    Service = each.key
+  })
 }
 
-# CPU-based Scaling Policy
+# Auto Scaling Policies
 resource "aws_appautoscaling_policy" "cpu_scaling" {
-  name               = "${var.environment}-${var.project_name}-cpu-scaling"
+  for_each = var.services
+
+  name               = "${var.environment}-${var.project_name}-${each.key}-cpu-scaling"
   policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.ecs_target.resource_id
-  scalable_dimension = aws_appautoscaling_target.ecs_target.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.ecs_target.service_namespace
+  resource_id        = aws_appautoscaling_target.services[each.key].resource_id
+  scalable_dimension = aws_appautoscaling_target.services[each.key].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.services[each.key].service_namespace
 
   target_tracking_scaling_policy_configuration {
     predefined_metric_specification {
       predefined_metric_type = "ECSServiceAverageCPUUtilization"
     }
-    target_value = 75
+    target_value       = 70
     scale_in_cooldown  = 300
     scale_out_cooldown = 300
   }
 }
 
-# Memory-based Scaling Policy
 resource "aws_appautoscaling_policy" "memory_scaling" {
-  name               = "${var.environment}-${var.project_name}-memory-scaling"
+  for_each = var.services
+
+  name               = "${var.environment}-${var.project_name}-${each.key}-memory-scaling"
   policy_type        = "TargetTrackingScaling"
-  resource_id        = aws_appautoscaling_target.ecs_target.resource_id
-  scalable_dimension = aws_appautoscaling_target.ecs_target.scalable_dimension
-  service_namespace  = aws_appautoscaling_target.ecs_target.service_namespace
+  resource_id        = aws_appautoscaling_target.services[each.key].resource_id
+  scalable_dimension = aws_appautoscaling_target.services[each.key].scalable_dimension
+  service_namespace  = aws_appautoscaling_target.services[each.key].service_namespace
 
   target_tracking_scaling_policy_configuration {
     predefined_metric_specification {
       predefined_metric_type = "ECSServiceAverageMemoryUtilization"
     }
-    target_value = 75
+    target_value       = 70
     scale_in_cooldown  = 300
     scale_out_cooldown = 300
   }
 }
 
-# High CPU Utilization Alarm
-resource "aws_cloudwatch_metric_alarm" "ecs_cpu_high" {
-  alarm_name          = "${var.environment}-${var.project_name}-ecs-cpu-high"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = "3"
-  metric_name         = "CPUUtilization"
-  namespace          = "AWS/ECS"
-  period             = "300"
-  statistic          = "Average"
-  threshold          = 75
-  alarm_description  = "ECS service CPU high utilization"
-  alarm_actions      = var.notification_topic_arns
-
-  dimensions = {
-    ClusterName = aws_ecs_cluster.main.name
-    ServiceName = aws_ecs_service.main.name
-  }
-}
-
-# Low CPU Utilization Alarm
-resource "aws_cloudwatch_metric_alarm" "ecs_cpu_low" {
-  alarm_name          = "${var.environment}-${var.project_name}-ecs-cpu-low"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = "3"
-  metric_name         = "CPUUtilization"
-  namespace          = "AWS/ECS"
-  period             = "300"
-  statistic          = "Average"
-  threshold          = 25
-  alarm_description  = "ECS service CPU low utilization"
-  alarm_actions      = var.notification_topic_arns
-
-  dimensions = {
-    ClusterName = aws_ecs_cluster.main.name
-    ServiceName = aws_ecs_service.main.name
-  }
-}
-
-# High Memory Utilization Alarm
-resource "aws_cloudwatch_metric_alarm" "ecs_memory_high" {
-  alarm_name          = "${var.environment}-${var.project_name}-ecs-memory-high"
-  comparison_operator = "GreaterThanThreshold"
-  evaluation_periods  = "3"
-  metric_name         = "MemoryUtilization"
-  namespace          = "AWS/ECS"
-  period             = "300"
-  statistic          = "Average"
-  threshold          = 75
-  alarm_description  = "ECS service memory high utilization"
-  alarm_actions      = var.notification_topic_arns
-
-  dimensions = {
-    ClusterName = aws_ecs_cluster.main.name
-    ServiceName = aws_ecs_service.main.name
-  }
-}
-
-# Low Memory Utilization Alarm
-resource "aws_cloudwatch_metric_alarm" "ecs_memory_low" {
-  alarm_name          = "${var.environment}-${var.project_name}-ecs-memory-low"
-  comparison_operator = "LessThanThreshold"
-  evaluation_periods  = "3"
-  metric_name         = "MemoryUtilization"
-  namespace          = "AWS/ECS"
-  period             = "300"
-  statistic          = "Average"
-  threshold          = 25
-  alarm_description  = "ECS service memory low utilization"
-  alarm_actions      = var.notification_topic_arns
-
-  dimensions = {
-    ClusterName = aws_ecs_cluster.main.name
-    ServiceName = aws_ecs_service.main.name
-  }
-}
-
-# CloudWatch Log Group
-resource "aws_cloudwatch_log_group" "main" {
-  name              = "/ecs/${var.environment}-${var.project_name}"
-  retention_in_days = 7
-
-  tags = {
-    Name        = "${var.environment}-${var.project_name}-logs"
-    Environment = var.environment
-  }
-}
-
-# Get current AWS region
+# Data sources
 data "aws_region" "current" {}
+data "aws_caller_identity" "current" {}

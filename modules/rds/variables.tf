@@ -18,26 +18,27 @@ variable "private_subnets" {
   type        = list(string)
 }
 
-variable "redis_sg_id" {
-  description = "Redis security group ID"
+variable "rds_sg_id" {
+  description = "RDS security group ID"
   type        = string
 }
 
-variable "redis_config" {
-  description = "Redis configuration"
+variable "rds_config" {
+  description = "RDS configuration"
   type = object({
-    node_type           = string
-    num_cache_nodes     = number
-    parameter_group_family = string
+    engine              = string
     engine_version      = string
-    port               = number
+    instance_class      = string
+    allocated_storage   = number
+    max_allocated_storage = number
+    database_name       = string
+    username           = string
+    backup_retention_period = number
+    backup_window      = string
     maintenance_window = string
-    snapshot_window    = string
-    snapshot_retention_limit = number
-    automatic_failover_enabled = bool
-    multi_az_enabled   = bool
-    at_rest_encryption_enabled = bool
-    transit_encryption_enabled = bool
+    multi_az          = bool
+    storage_encrypted = bool
+    deletion_protection = bool
   })
 }
 

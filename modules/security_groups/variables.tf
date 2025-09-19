@@ -3,13 +3,18 @@ variable "environment" {
   type        = string
 }
 
+variable "project_name" {
+  description = "Project name"
+  type        = string
+}
+
 variable "vpc_id" {
   description = "VPC ID"
   type        = string
 }
 
-variable "container_port" {
-  description = "Port exposed by the container"
-  type        = number
-  default     = 80
+variable "common_tags" {
+  description = "Common tags for all resources"
+  type        = map(string)
+  default     = {}
 }

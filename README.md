@@ -1,26 +1,47 @@
-# ECS Website Infrastructure with Redis
+# Carcierge Multi-Environment Infrastructure with ECS, Redis, OpenSearch, and RDS
 
-This Terraform project sets up a production-ready infrastructure on AWS for hosting a website using ECS (Elastic Container Service) with Redis caching. The infrastructure is designed with high availability, scalability, and security in mind.
+This Terraform project sets up a production-ready infrastructure on AWS for hosting the Carcierge application using ECS (Elastic Container Service) with Redis caching, OpenSearch for search and analytics, and RDS for database services. The infrastructure is designed with high availability, scalability, and security in mind, supporting multiple environments and services.
 
 ## Architecture Overview
 
 The infrastructure consists of:
 
-- VPC with public and private subnets across multiple availability zones
-- NAT Gateways for private subnet internet access
-- ECS Fargate cluster for container orchestration
-- Application Load Balancer (ALB) for traffic distribution
-- Redis ElastiCache for caching
-- Auto-scaling capabilities based on CPU and memory utilization
-- CloudWatch for logging and monitoring
-- S3 and DynamoDB for Terraform state management
+- **VPC** with public and private subnets across multiple availability zones
+- **NAT Gateways** for private subnet internet access
+- **ECS Fargate cluster** for container orchestration (supporting multiple services)
+- **Application Load Balancer (ALB)** for traffic distribution
+- **Redis ElastiCache** for caching
+- **OpenSearch** for search and analytics
+- **RDS** for relational database services
+- **Auto-scaling capabilities** based on CPU and memory utilization
+- **CloudWatch** for logging and monitoring
+- **S3 and DynamoDB** for Terraform state management
+
+## Project Structure
+
+The Carcierge application consists of 5 sub-projects, each deployed as separate ECS services:
+1. Service 1 (configurable via terraform.tfvars)
+2. Service 2 (configurable via terraform.tfvars)
+3. Service 3 (configurable via terraform.tfvars)
+4. Service 4 (configurable via terraform.tfvars)
+5. Service 5 (configurable via terraform.tfvars)
+
+## Environment Management
+
+This infrastructure supports 4 environments managed through GitLab branches:
+- **staging** → main branch
+- **qa** → qa branch  
+- **uat** → uat branch
+- **prod** → prod branch
 
 ## Prerequisites
 
-- Terraform >= 1.0.0
+- Terraform >= 1.2.9
 - AWS CLI configured with appropriate credentials
-- Docker image for your website application
+- Docker images for your Carcierge services pushed to ECR
 - S3 bucket and DynamoDB table for state management
+- SSL certificates in AWS Certificate Manager
+- GitLab CI/CD configured
 
 ## Module Structure
 
@@ -31,221 +52,271 @@ The infrastructure consists of:
 ├── outputs.tf             # Output values
 ├── backend.tf            # Terraform backend configuration
 ├── version.tf            # Provider and version constraints
-├── state-backend.tf      # State storage infrastructure
+├── terraform.tfvars      # Environment-specific configuration
+├── pipeline-scripts/     # GitLab CI/CD scripts
 └── modules/
     ├── vpc/              # VPC and networking
-    ├── ecs/              # ECS cluster and service
+    ├── ecs/              # ECS cluster and services
     ├── elasticache/      # Redis configuration
+    ├── opensearch/       # OpenSearch configuration
+    ├── rds/              # RDS database configuration
     └── security_groups/  # Security group definitions
 ```
 
-## Initial Setup
+## Naming Convention
 
-### 1. Set up State Backend
+All resources follow the naming pattern:
+```
+<environment>-carcierge-<resource>-<subresource>
+```
 
-First, deploy the state management infrastructure:
+Examples:
+- `staging-carcierge-ecs-cluster`
+- `prod-carcierge-vpc-public-subnet`
+- `qa-carcierge-alb-main`
+
+## Configuration
+
+### Environment-Specific Configuration
+
+All environment-specific settings are managed through `terraform.tfvars`. Key configurations include:
+
+```hcl
+# Environment and Project
+environment = "staging"  # staging, qa, uat, prod
+project_name = "carcierge"
+
+# Services Configuration
+services = {
+  service1 = {
+    container_image = "your-ecr-repo/service1:latest"
+    container_port = 3001
+    desired_count = 2
+    cpu = 512
+    memory = 1024
+  }
+  service2 = {
+    container_image = "your-ecr-repo/service2:latest"
+    container_port = 3002
+    desired_count = 2
+    cpu = 512
+    memory = 1024
+  }
+  # ... additional services
+}
+
+# Database Configuration
+rds_config = {
+  engine = "postgres"
+  engine_version = "14.9"
+  instance_class = "db.t3.micro"
+  allocated_storage = 20
+  database_name = "carcierge"
+  username = "carcierge_user"
+}
+
+# OpenSearch Configuration
+opensearch_config = {
+  engine_version = "OpenSearch_2.3"
+  instance_type = "t3.small.search"
+  instance_count = 1
+  volume_size = 20
+}
+```
+
+## GitLab CI/CD Pipeline
+
+The pipeline includes the following stages:
+
+### 1. Validate Stage
+- Runs `terraform init`, `terraform validate`, and `terraform fmt`
+- Ensures code quality and syntax correctness
+
+### 2. Plan Stage
+- Generates terraform plan
+- Creates artifacts for review
+- Runs on all branches
+
+### 3. Analyse Stage (Optional)
+- **Security Scan**: Runs security analysis if `RUN_SECURITY_SCAN=TRUE`
+- **Cost Analysis**: Runs cost estimation if `RUN_COST_SCAN=TRUE`
+
+### 4. Apply Stage
+- **Manual Trigger**: Requires manual approval
+- Only runs on main branch
+- Applies the planned changes
+
+### Pipeline Variables
+
+Configure these variables in GitLab CI/CD settings:
+
+```yaml
+variables:
+  ENVIRONMENTS: "staging"  # Current environment
+  MODULES: "app"
+  APP_NAME: "carcierge"
+  TYPE: "app"
+  BACKEND_REGION: "us-west-1"
+  RUN_SECURITY_SCAN: "FALSE"
+  RUN_COST_SCAN: "FALSE"
+  TF_LOG: ""  # Terraform logging level
+```
+
+## Deployment Process
+
+### 1. Initial Setup
+
+1. **Configure Backend**: Update `backend.tf` with your S3 bucket and DynamoDB table
+2. **Update Variables**: Modify `terraform.tfvars` for your environment
+3. **Set Secrets**: Configure sensitive variables in GitLab CI/CD variables
+
+### 2. Branch-Based Deployment
+
+1. **Create/Update** `terraform.tfvars` for your target environment
+2. **Commit and Push** to the appropriate branch
+3. **Pipeline Execution**:
+   - Validate stage runs automatically
+   - Plan stage generates execution plan
+   - Review the plan in GitLab artifacts
+   - **Manual Approval** required for apply stage
+4. **Apply** the changes after manual approval
+
+### 3. Multi-Environment Management
+
+Each environment is managed through its respective branch:
 
 ```bash
-# Initialize Terraform
-terraform init
+# Staging deployment
+git checkout main
+# Update terraform.tfvars with staging config
+git commit -m "Update staging configuration"
+git push origin main
 
-# Create state backend infrastructure
-terraform apply -target=aws_s3_bucket.terraform_state -target=aws_dynamodb_table.terraform_state_lock
-
-# Update backend.tf with your bucket and table names
+# QA deployment  
+git checkout qa
+# Update terraform.tfvars with qa config
+git commit -m "Update qa configuration"
+git push origin qa
 ```
 
-### 2. Configure Variables
+## Security Features
 
-Create a `terraform.tfvars` file with your configuration:
+- **VPC Isolation**: All resources deployed in private subnets where possible
+- **Security Groups**: Restrictive ingress/egress rules
+- **Encryption**: At-rest and in-transit encryption enabled
+- **IAM Roles**: Least privilege access principles
+- **Network ACLs**: Additional network-level security
+- **Secrets Management**: Sensitive data stored in AWS Secrets Manager
 
+## High Availability Features
+
+- **Multi-AZ Deployment**: Resources distributed across availability zones
+- **Auto Scaling**: ECS services scale based on CPU/memory metrics
+- **Load Balancing**: Application Load Balancer distributes traffic
+- **Database Failover**: RDS Multi-AZ for automatic failover
+- **Backup Strategy**: Automated backups for RDS and OpenSearch
+
+## Monitoring and Logging
+
+- **CloudWatch Logs**: Centralized logging for all services
+- **CloudWatch Metrics**: Custom and AWS metrics monitoring
+- **CloudWatch Alarms**: Automated alerting for critical metrics
+- **Container Insights**: Enhanced ECS monitoring
+- **OpenSearch Dashboards**: Log analysis and visualization
+
+## Required Updates
+
+Before deployment, update the following in `terraform.tfvars`:
+
+### 1. Container Images
 ```hcl
-# Infrastructure Settings
-aws_region    = "us-west-2"
-environment   = "dev"
-project_name  = "website"
-
-# VPC Configuration
-vpc_cidr      = "10.0.0.0/16"
-public_cidrs  = ["10.0.1.0/24", "10.0.2.0/24"]
-private_cidrs = ["10.0.3.0/24", "10.0.4.0/24"]
-
-# Container Configuration
-container_image = "your-docker-image:latest"
-container_port  = 80
-desired_count   = 2
-container_cpu    = 256
-container_memory = 512
-
-# Redis Configuration
-redis_node_type = "cache.t3.micro"
-
-# Instance Configuration (if using EC2 launch type)
-instance_type = "t3.micro"
-```
-
-### 3. Backend Configuration
-
-Update `backend.tf` with your state storage details:
-
-```hcl
-terraform {
-  backend "s3" {
-    bucket         = "terraform-state-website"
-    key            = "terraform.tfstate"
-    region         = "us-west-2"
-    dynamodb_table = "terraform-state-lock-website"
-    encrypt        = true
+services = {
+  service1 = {
+    container_image = "123456789012.dkr.ecr.us-west-1.amazonaws.com/carcierge-service1:latest"
+    # ... other config
   }
 }
 ```
 
-## Deployment
-
-1. Initialize Terraform with the backend configuration:
-   ```bash
-   terraform init
-   ```
-
-2. Review the execution plan:
-   ```bash
-   terraform plan -var-file="terraform.tfvars"
-   ```
-3. Apply the configuration:
-   ```bash
-   terraform apply -var-file="terraform.tfvars"
-   ```
-
-4. To destroy the infrastructure:
-   ```bash
-   terraform destroy
-   ```
-
-## Infrastructure Components
-
-### VPC and Networking
-- VPC with custom CIDR block
-- Public and private subnets in multiple AZs
-- Internet Gateway for public subnets
-- NAT Gateways for private subnet internet access
-- Route tables for public and private subnets
-
-### ECS Configuration
-- Fargate launch type
-- Auto-scaling based on CPU and memory
-- Application Load Balancer
-- CloudWatch logging
-- Launch template configuration (for EC2 launch type)
-
-### Redis ElastiCache
-- Single-node Redis cluster
-- Subnet group in private subnets
-- Security group with ECS access
-
-### Security Groups
-- ALB security group (ports 80, 443)
-- ECS security group (application port)
-- Redis security group (port 6379)
-
-## Auto Scaling
-
-The ECS service automatically scales based on:
-- CPU utilization (threshold: 75%)
-- Memory utilization (threshold: 75%)
-- Minimum capacity: 1 container
-- Maximum capacity: 4 containers
-
-## Security
-
-- All resources are deployed in a VPC with proper network segmentation
-- Security groups restrict access to required ports only
-- ECS tasks run in private subnets
-- ALB is the only public-facing component
-- Redis is deployed in private subnets with restricted access
-- NAT Gateways enable private subnet internet access
-
-## Monitoring and Logging
-
-- CloudWatch log groups for ECS tasks
-- Container insights enabled for enhanced monitoring
-- ALB access logs (optional)
-- Redis performance metrics
-
-## State Management
-
-The Terraform state is stored in:
-- S3 bucket with versioning enabled
-- DynamoDB table for state locking
-- Server-side encryption enabled
-
-### State Backend Setup Commands
-
-```bash
-# Create S3 bucket
-aws s3api create-bucket \
-    --bucket terraform-state-website \
-    --region us-west-2 \
-    --create-bucket-configuration LocationConstraint=us-west-2
-
-# Enable versioning
-aws s3api put-bucket-versioning \
-    --bucket terraform-state-website \
-    --versioning-configuration Status=Enabled
-
-# Create DynamoDB table
-aws dynamodb create-table \
-    --table-name terraform-state-lock-website \
-    --attribute-definitions AttributeName=LockID,AttributeType=S \
-    --key-schema AttributeName=LockID,KeyType=HASH \
-    --provisioned-throughput ReadCapacityUnits=1,WriteCapacityUnits=1 \
-    --region us-west-2
+### 2. SSL Certificates
+```hcl
+ssl_certificate_arn = "arn:aws:acm:us-west-1:123456789012:certificate/12345678-1234-1234-1234-123456789012"
 ```
 
-## Outputs
+### 3. Database Credentials
+```hcl
+rds_config = {
+  username = "your_db_username"
+  # Password will be auto-generated and stored in Secrets Manager
+}
+```
 
-- `alb_dns_name`: DNS name of the load balancer
-- `ecs_cluster_name`: Name of the ECS cluster
-- `ecs_service_name`: Name of the ECS service
-- `redis_endpoint`: Endpoint of the Redis cluster
-- `vpc_id`: ID of the created VPC
-- `public_subnets`: IDs of public subnets
-- `private_subnets`: IDs of private subnets
-
-## Environment Variables
-
-The ECS task definition includes the following environment variables:
-- `REDIS_HOST`: Redis endpoint (automatically updated)
-- `REDIS_PORT`: Redis port (default: 6379)
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+### 4. Domain Configuration
+```hcl
+domain_name = "carcierge.yourdomain.com"
+```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. State Lock Issues
+1. **State Lock Issues**
 ```bash
-# Force unlock state
 terraform force-unlock LOCK_ID
 ```
 
-2. Backend Configuration
+2. **ECR Authentication**
 ```bash
-# Reconfigure backend
-terraform init -reconfigure
+aws ecr get-login-password --region us-west-1 | docker login --username AWS --password-stdin 123456789012.dkr.ecr.us-west-1.amazonaws.com
 ```
 
-3. Resource Dependencies
-```bash
-# Target specific resources
-terraform apply -target=module.vpc
+3. **Service Discovery Issues**
+- Check security group rules
+- Verify service mesh configuration
+- Review CloudWatch logs
+
+### Pipeline Debugging
+
+1. **Enable Terraform Logging**
+```yaml
+TF_LOG: "DEBUG"
 ```
+
+2. **Review Artifacts**
+- Download `.tfplan` files from GitLab artifacts
+- Use `terraform show` to inspect plans
+
+## Cost Optimization
+
+- **Right-sizing**: Regularly review and adjust instance sizes
+- **Reserved Instances**: Use RIs for predictable workloads
+- **Spot Instances**: Consider spot instances for non-critical services
+- **Auto Scaling**: Implement proper scaling policies
+- **Resource Cleanup**: Regular cleanup of unused resources
+
+## Backup and Disaster Recovery
+
+- **RDS Automated Backups**: 7-day retention by default
+- **OpenSearch Snapshots**: Daily automated snapshots
+- **Infrastructure as Code**: Complete infrastructure reproducibility
+- **Multi-Region**: Consider multi-region deployment for critical workloads
+
+## Contributing
+
+1. Create feature branch from appropriate environment branch
+2. Update `terraform.tfvars` as needed
+3. Test changes in lower environments first
+4. Create merge request with detailed description
+5. Ensure pipeline passes all stages
+6. Require manual approval for production changes
+
+## Support
+
+For issues and questions:
+1. Check CloudWatch logs for application issues
+2. Review Terraform state for infrastructure issues
+3. Use GitLab issues for tracking problems
+4. Follow the troubleshooting guide above
 
 ## License
 

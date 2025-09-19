@@ -5,14 +5,18 @@ variable "aws_region" {
 }
 
 variable "environment" {
-  description = "Environment name"
+  description = "Environment name (staging, qa, uat, prod)"
   type        = string
-  default     = "dev"
+  validation {
+    condition     = contains(["staging", "qa", "uat", "prod"], var.environment)
+    error_message = "Environment must be one of: staging, qa, uat, prod."
+  }
 }
 
 variable "project_name" {
   description = "Project name"
   type        = string
+  default     = "carcierge"
 }
 
 variable "vpc_cidr" {
@@ -33,111 +37,17 @@ variable "private_cidrs" {
   default     = ["10.0.3.0/24", "10.0.4.0/24"]
 }
 
-variable "container_image" {
-  description = "Docker image for the website container"
-  type        = string
-}
-
-variable "container_port" {
-  description = "Port exposed by the website container"
-  type        = number
-  default     = 80
-}
-
-variable "desired_count" {
-  description = "Desired number of website containers"
-  type        = number
-  default     = 2
-}
-
-variable "redis_node_type" {
-  description = "ElastiCache Redis node type"
-  type        = string
-  default     = "cache.t3.micro"
-}
-
-variable "task_cpu" {
-  description = "Number of CPU units for the task (1 vCPU = 1024 CPU units)"
-  type        = number
-  default     = 1024  # 2 vCPU
-}
-
-variable "task_memory" {
-  description = "Amount of memory in MiB for the task"
-  type        = number
-  default     = 3072  # 4GB
-}
-variable "container_cpu" {
-  description = "CPU units for the container"
-  type        = number
-  default     = 0
-}
-
-variable "container_memory" {
-  description = "Memory for the container in MB"
-  type        = number
-  default     = 0
-}
-
-variable "min_capacity" {
-  description = "Minimum number of containers"
-  type        = number
-  default     = 1
-}
-
-variable "max_capacity" {
-  description = "Maximum number of containers"
-  type        = number
-  default     = 4
-}
-
-variable "cpu_threshold" {
-  description = "CPU threshold for scaling"
-  type        = number
-  default     = 75
-}
-
-variable "memory_threshold" {
-  description = "Memory threshold for scaling"
-  type        = number
-  default     = 75
-}
-
-variable "scale_out_cooldown" {
-  description = "Cooldown period after scaling out"
-  type        = number
-  default     = 300
-}
-
-variable "scale_in_cooldown" {
-  description = "Cooldown period after scaling in"
-  type        = number
-  default     = 300
-}
-
-variable "target_cpu_utilization" {
-  description = "Target CPU utilization percentage"
-  type        = number
-  default     = 70
-}
-
-variable "target_memory_utilization" {
-  description = "Target memory utilization percentage"
-  type        = number
-  default     = 70
-}
-
-variable "instance_type" {
-  description = "EC2 instance type for ECS container instances"
-  type        = string
-  default     = "t3a.large"
-}
-
-
-variable "additional_tags" {
-  description = "Additional tags for resources"
-  type        = map(string)
-  default     = {}
+variable "services" {
+  description = "Configuration for ECS services"
+  type = map(object({
+    container_image = string
+    container_port  = number
+    desired_count   = number
+    cpu            = number
+    memory         = number
+    health_check_path = optional(string, "/")
+    environment_variables = optional(map(string), {})
+  }))
 }
 
 variable "ssl_certificate_arn" {
@@ -145,22 +55,62 @@ variable "ssl_certificate_arn" {
   type        = string
 }
 
-variable "num_cache_nodes" {
-  description = "Number of cache nodes for Redis cluster"
-  type        = number
-  default     = 0
+variable "rds_config" {
+  description = "RDS configuration"
+  type = object({
+    engine              = string
+    engine_version      = string
+    instance_class      = string
+    allocated_storage   = number
+    max_allocated_storage = optional(number, 100)
+    database_name       = string
+    username           = string
+    backup_retention_period = optional(number, 7)
+    backup_window      = optional(string, "03:00-04:00")
+    maintenance_window = optional(string, "sun:04:00-sun:05:00")
+    multi_az          = optional(bool, false)
+    storage_encrypted = optional(bool, true)
+    deletion_protection = optional(bool, false)
+  })
 }
 
-variable "notification_topic_arns" {
-  description = "List of SNS topic ARNs for CloudWatch alarms"
-  type        = list(string)
-  default     = []
+variable "opensearch_config" {
+  description = "OpenSearch configuration"
+  type = object({
+    engine_version    = string
+    instance_type     = string
+    instance_count    = number
+    volume_type       = optional(string, "gp3")
+    volume_size       = number
+    dedicated_master_enabled = optional(bool, false)
+    master_instance_type = optional(string, "")
+    master_instance_count = optional(number, 0)
+    zone_awareness_enabled = optional(bool, false)
+    encrypt_at_rest = optional(bool, true)
+    node_to_node_encryption = optional(bool, true)
+  })
+}
+
+variable "redis_config" {
+  description = "Redis configuration"
+  type = object({
+    node_type           = string
+    num_cache_nodes     = number
+    parameter_group_family = optional(string, "redis7")
+    engine_version      = optional(string, "7.0")
+    port               = optional(number, 6379)
+    maintenance_window = optional(string, "sun:05:00-sun:06:00")
+    snapshot_window    = optional(string, "00:00-01:00")
+    snapshot_retention_limit = optional(number, 5)
+    automatic_failover_enabled = optional(bool, false)
+    multi_az_enabled   = optional(bool, false)
+    at_rest_encryption_enabled = optional(bool, true)
+    transit_encryption_enabled = optional(bool, true)
+  })
 }
 
 variable "common_tags" {
   description = "Common tags for all resources"
   type        = map(string)
   default     = {}
-
 }
-

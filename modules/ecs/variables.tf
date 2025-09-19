@@ -33,86 +33,17 @@ variable "alb_sg_id" {
   type        = string
 }
 
-variable "container_image" {
-  description = "Docker image for the container"
-  type        = string
-}
-
-variable "container_port" {
-  description = "Port exposed by the container"
-  type        = number
-  default     = 80
-}
-
-variable "task_cpu" {
-  description = "Number of CPU units for the task (1 vCPU = 1024 CPU units)"
-  type        = number
-  default     = 1024  # 2 vCPU
-}
-
-variable "task_memory" {
-  description = "Amount of memory in MiB for the task"
-  type        = number
-  default     = 3072  # 4GB
-}
-variable "container_cpu" {
-  description = "CPU units for the container"
-  type        = number
-  default     = 0
-}
-
-variable "container_memory" {
-  description = "Memory for the container in MB"
-  type        = number
-  default     = 0
-}
-
-variable "desired_count" {
-  description = "Desired number of containers"
-  type        = number
-  default     = 3
-}
-
-variable "health_check_path" {
-  description = "Health check path for the default target group"
-  type        = string
-  default     = "/"
-}
-
-variable "container_environment" {
-  description = "Environment variables for the container"
-  type        = list(map(string))
-  default     = []
-}
-
-variable "max_capacity" {
-  description = "Maximum number of containers"
-  type        = number
-  default     = 12
-}
-
-variable "min_capacity" {
-  description = "Minimum number of containers"
-  type        = number
-  default     = 3
-}
-
-variable "cpu_threshold" {
-  description = "CPU threshold for scaling"
-  type        = number
-  default     = 75
-}
-
-variable "memory_threshold" {
-  description = "Memory threshold for scaling"
-  type        = number
-  default     = 75
-}
-
-variable "instance_type" {
-  description = "EC2 instance type for ECS container instances"
-  type        = string
-  default     = "t3a.large"
+variable "services" {
+  description = "Configuration for ECS services"
+  type = map(object({
+    container_image = string
+    container_port  = number
+    desired_count   = number
+    cpu            = number
+    memory         = number
+    health_check_path = string
+    environment_variables = map(string)
+  }))
 }
 
 variable "ssl_certificate_arn" {
@@ -120,8 +51,23 @@ variable "ssl_certificate_arn" {
   type        = string
 }
 
-variable "notification_topic_arns" {
-  description = "List of SNS topic ARNs for CloudWatch alarms"
-  type        = list(string)
-  default     = []
+variable "rds_endpoint" {
+  description = "RDS endpoint"
+  type        = string
+}
+
+variable "redis_endpoint" {
+  description = "Redis endpoint"
+  type        = string
+}
+
+variable "opensearch_endpoint" {
+  description = "OpenSearch endpoint"
+  type        = string
+}
+
+variable "common_tags" {
+  description = "Common tags for all resources"
+  type        = map(string)
+  default     = {}
 }
